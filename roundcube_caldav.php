@@ -33,6 +33,7 @@ require_once(__DIR__ . '/lib/php/password_encryption.php');
 require_once(__DIR__ . '/lib/php/ics_file_modification.php');
 require_once(__DIR__ . '/lib/php/event_comparison.php');
 require_once(__DIR__ . '/lib/php/set_response.php');
+require_once(__DIR__ . '/lib/php/oidc_helper.php');
 
 class roundcube_caldav extends rcube_plugin
 {
@@ -48,12 +49,23 @@ class roundcube_caldav extends rcube_plugin
     protected $arrayOfCalendars;
     protected $all_events = [];
     protected $connected = false;
+    /** @var oidc_helper $oidc_helper */
+    protected $oidc_helper;
 
     function init()
     {
         $this->rcmail = rcmail::get_instance();
         $this->rcube = rcube::get_instance();
         $this->load_config();
+        
+        // Initialize OIDC helper with error handling
+        try {
+            $this->oidc_helper = new oidc_helper($this->rcube);
+        } catch (Exception $e) {
+            // Log error but don't crash the plugin
+            error_log('Failed to initialize OIDC helper: ' . $e->getMessage());
+            $this->oidc_helper = null;
+        }
 
         $this->add_texts('localization/', true);
         $this->include_script('roundcube_caldav.js');
@@ -262,7 +274,37 @@ class roundcube_caldav extends rcube_plugin
     function display_server_caldav_form(array $param_list): array
     {
         $server = $this->rcube->config->get('server_caldav');
+        
+        // Check if OIDC helper is available and has valid credentials
+        $oidc_enabled = false;
+        $oidc_config = null;
+        
+        if ($this->oidc_helper !== null) {
+            $oidc_config = $this->oidc_helper->getOidcConfig();
+            $oidc_enabled = $oidc_config['enabled'] && $oidc_config['has_credentials'];
+        }
 
+        // If OIDC is enabled and working, show only status message
+        if ($oidc_enabled) {
+            $param_list['blocks']['main']['options']['oidc_status'] = array(
+                'title'   => html::label('oidc_status', rcube::Q('Authentication Method')),
+                'content' => html::span(['class' => 'oidc-status-success'], rcube::Q('OIDC Enabled - Using Nextcloud session')),
+            );
+            
+            $param_list['blocks']['main']['options']['oidc_info'] = array(
+                'title'   => html::label('oidc_info', rcube::Q('CalDAV URL')),
+                'content' => html::span(['class' => 'oidc-info'], rcube::Q($oidc_config['caldav_url'])),
+            );
+            
+            $param_list['blocks']['main']['options']['oidc_user'] = array(
+                'title'   => html::label('oidc_user', rcube::Q('Username')),
+                'content' => html::span(['class' => 'oidc-info'], rcube::Q($oidc_config['username'])),
+            );
+            
+            return $param_list;
+        }
+
+        // Otherwise, show traditional configuration fields
         $_url_base_server = '';
         $_login_server = '';
 
