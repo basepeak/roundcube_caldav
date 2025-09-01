@@ -13,15 +13,15 @@
  */
 
 $labels = array();
-$labels['server_caldav'] = 'Configuration serveur CalDAV';
-$labels['url_base'] = "Indiquez l'url de votre serveur calDAV sous la forme : \n https://my_caldav_server/remote.php/calendars/my_name";
-$labels['login'] = 'Indiquer votre login utilisé sur le serveur';
-$labels['password'] = 'Indiquez votre mot de passe';
-$labels['save_error_msg'] = 'Vos informations sont incorrectes et/ou incomplètes';
+$labels['server_caldav'] = 'Configuration serveur CalDAV (OIDC)';
+$labels['url_base'] = "URL du serveur CalDAV (détectée automatiquement via OIDC)";
+$labels['login'] = 'Nom d\'utilisateur (détecté automatiquement via OIDC)';
+$labels['password'] = 'Mot de passe (token OIDC utilisé comme mot de passe)';
+$labels['save_error_msg'] = 'L\'authentification OIDC a échoué ou la configuration est incomplète';
 $labels['main_calendar'] = 'Veuillez indiquer votre calendrier par default';
 $labels['calendar_choice'] = 'Attention : si vous modifiez votre url / login / mot de passe vos préférences seront oubliées. \n
  Veuillez choisir votre calendrier par default  ainsi que les calendriers que vous serez amené à utilisé ';
-$labels['connect_error_msg'] = 'La connection avec votre server CalDAV à échouée';
+$labels['connect_error_msg'] = 'La connexion avec votre serveur CalDAV a échoué avec l\'authentification OIDC';
 $labels['find_calendar_error'] = 'La récupération des calendriers disponibles a provoqué une erreur';
 $labels['something_happened_while_sending_information_to_client'] = "Quelque chose ne s'est pas bien passé lors de l'envoi des informations à afficher ";
 $labels['ErrorEmptyArrayOfCalendar'] = "Vous n'avez aucun calendrier sélectionné";

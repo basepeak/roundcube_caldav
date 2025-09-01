@@ -40,7 +40,55 @@ $config['plugins'] = [
 
 ### 3. Configure OIDC Support
 
-The plugin will automatically detect Nextcloud cookies when available. No additional configuration is required.
+#### Basic Configuration
+
+Include the plugin's configuration in your Roundcube `config/config.inc.php`:
+
+```php
+// Include the plugin configuration
+require_once(__DIR__ . '/plugins/roundcube_caldav/config.inc.php');
+```
+
+#### Customizing Cookie Names
+
+The plugin uses configurable cookie names to support different Nextcloud/OpenID Connect setups. You can customize these in your configuration:
+
+```php
+// Default configuration for standard Nextcloud installations
+$config['nextcloud_cookies'] = [
+    'token' => 'nc_token',        // Cookie containing the OIDC access token
+    'username' => 'nc_username',  // Cookie containing the authenticated username
+    'session_id' => 'nc_session_id' // Cookie containing the session identifier
+];
+
+// Alternative configurations for custom setups:
+// For custom Nextcloud installations:
+$config['nextcloud_cookies'] = [
+    'token' => 'myapp_token',
+    'username' => 'myapp_user',
+    'session_id' => 'myapp_session'
+];
+
+// For generic OIDC providers:
+$config['nextcloud_cookies'] = [
+    'token' => 'oidc_access_token',
+    'username' => 'oidc_user',
+    'session_id' => 'oidc_session'
+];
+```
+
+#### Additional Configuration Options
+
+```php
+// Enable/disable OIDC support
+$config['oidc_enabled'] = true;
+
+// Custom Nextcloud domain (if different from current domain)
+$config['nextcloud_domain'] = 'cloud.example.com';
+
+// Custom CalDAV path
+$config['caldav_path'] = '/remote.php/dav/calendars/';
+```
 
 ## Usage
 
@@ -62,11 +110,17 @@ You can still manually enter credentials if needed:
 
 ## Cookie Detection
 
-The plugin looks for these Nextcloud cookies:
+### Default Cookie Names
+
+The plugin looks for these Nextcloud cookies by default:
 
 - `nc_token` - Authentication token
 - `nc_username` - Your username
 - `nc_session_id` - Session identifier
+
+### Custom Cookie Names
+
+If your Nextcloud installation uses different cookie names, you can configure them in the `nextcloud_cookies` array. The plugin will automatically use your custom cookie names for authentication.
 
 ## Troubleshooting
 
@@ -76,6 +130,7 @@ The plugin looks for these Nextcloud cookies:
 2. Check that both Roundcube and Nextcloud are on the same domain
 3. Verify cookies are not blocked by browser settings
 4. Check that HTTPS is properly configured
+5. **Verify cookie names match your configuration** - If your Nextcloud uses custom cookie names, make sure they're correctly configured in `nextcloud_cookies`
 
 ### Connection Issues
 
@@ -83,12 +138,24 @@ The plugin looks for these Nextcloud cookies:
 2. Check that Nextcloud CalDAV is enabled
 3. Ensure your user has calendar permissions
 4. Check Nextcloud logs for authentication errors
+5. **Check cookie configuration** - Ensure the cookie names in your configuration match what your Nextcloud installation actually uses
+
+### Debugging Cookie Detection
+
+You can check the Roundcube error logs to see which cookies are being detected:
+
+```bash
+tail -f /path/to/roundcube/logs/errors
+```
+
+Look for log entries starting with "OIDC Cookie Status:" to see which cookies are present or missing.
 
 ## Security Notes
 
 - Cookies are marked as `HttpOnly` and `Secure` by Nextcloud
 - Authentication tokens are automatically managed by Nextcloud
 - No passwords are stored in Roundcube when using OIDC mode
+- Cookie names are configurable to support different security setups
 
 ## Fallback
 

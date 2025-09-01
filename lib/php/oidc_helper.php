@@ -11,11 +11,19 @@ class oidc_helper
 {
     private $rcube;
     private $config;
+    private $cookie_names;
     
     public function __construct($rcube)
     {
         $this->rcube = $rcube;
         $this->config = $rcube->config;
+        
+        // Get configurable cookie names with fallback to defaults
+        $this->cookie_names = $this->config->get('nextcloud_cookies', [
+            'token' => 'nc_token',
+            'username' => 'nc_username',
+            'session_id' => 'nc_session_id'
+        ]);
     }
     
     /**
@@ -26,7 +34,16 @@ class oidc_helper
     public function isOidcEnabled(): bool
     {
         // Check if we have the necessary Nextcloud cookies
-        return $this->hasNextcloudCookies();
+        $has_cookies = $this->hasNextcloudCookies();
+        
+        // Log cookie status for debugging
+        error_log("OIDC Cookie Status:");
+        error_log("  " . $this->cookie_names['token'] . ": " . (isset($_COOKIE[$this->cookie_names['token']]) ? 'Present' : 'Missing'));
+        error_log("  " . $this->cookie_names['username'] . ": " . (isset($_COOKIE[$this->cookie_names['username']]) ? 'Present' : 'Missing'));
+        error_log("  " . $this->cookie_names['session_id'] . ": " . (isset($_COOKIE[$this->cookie_names['session_id']]) ? 'Present' : 'Missing'));
+        error_log("  All cookies present: " . ($has_cookies ? 'Yes' : 'No'));
+        
+        return $has_cookies;
     }
     
     /**
@@ -36,9 +53,9 @@ class oidc_helper
      */
     private function hasNextcloudCookies(): bool
     {
-        return isset($_COOKIE['nc_token']) && 
-               isset($_COOKIE['nc_username']) && 
-               isset($_COOKIE['nc_session_id']);
+        return isset($_COOKIE[$this->cookie_names['token']]) && 
+               isset($_COOKIE[$this->cookie_names['username']]) && 
+               isset($_COOKIE[$this->cookie_names['session_id']]);
     }
     
     /**
@@ -68,10 +85,14 @@ class oidc_helper
         $domain = $this->getCurrentDomain();
         $protocol = $this->isSecure() ? 'https' : 'http';
         
-        // Default Nextcloud CalDAV path
-        $caldavPath = '/remote.php/dav/calendars/';
+        // Get configurable CalDAV path with fallback to default
+        $caldavPath = $this->config->get('caldav_path', '/remote.php/dav/calendars/');
         
-        return $protocol . '://' . $domain . $caldavPath;
+        $url = $protocol . '://' . $domain . $caldavPath . $this->getUsername();
+        
+        error_log("OIDC CalDAV URL Generated: " . $url);
+        
+        return $url;
     }
     
     /**
@@ -93,7 +114,15 @@ class oidc_helper
      */
     public function getAccessToken(): ?string
     {
-        return $_COOKIE['nc_token'] ?? null;
+        $token = $_COOKIE[$this->cookie_names['token']] ?? null;
+        
+        if ($token) {
+            error_log("OIDC Token Retrieved: " . substr($token, 0, 20) . "...");
+        } else {
+            error_log("OIDC Token: Not found in cookies");
+        }
+        
+        return $token;
     }
     
     /**
@@ -103,7 +132,15 @@ class oidc_helper
      */
     public function getUsername(): ?string
     {
-        return $_COOKIE['nc_username'] ?? null;
+        $username = $_COOKIE[$this->cookie_names['username']] ?? null;
+        
+        if ($username) {
+            error_log("OIDC Username Retrieved: " . $username);
+        } else {
+            error_log("OIDC Username: Not found in cookies");
+        }
+        
+        return $username;
     }
     
     /**
@@ -113,7 +150,7 @@ class oidc_helper
      */
     public function getSessionId(): ?string
     {
-        return $_COOKIE['nc_session_id'] ?? null;
+        return $_COOKIE[$this->cookie_names['session_id']] ?? null;
     }
     
     /**
@@ -129,18 +166,37 @@ class oidc_helper
     }
     
     /**
-     * Get CalDAV authentication headers for Nextcloud
+     * Get CalDAV authentication credentials for basic auth
+     * Uses OIDC token as password for basic authentication
      * 
      * @return array
      */
-    public function getCalDavAuthHeaders(): array
+    public function getCalDavCredentials(): array
     {
+        return [
+            'username' => $this->getUsername(),
+            'password' => $this->getAccessToken(), // Use OIDC token as password
+            'token' => $this->getAccessToken()
+        ];
+    }
+    
+    /**
+     * Create custom cURL options for OIDC basic authentication
+     * 
+     * @return array
+     */
+    public function getCurlOptions(): array
+    {
+        $username = $this->getUsername();
         $token = $this->getAccessToken();
         
-        if ($token) {
+        if ($username && $token) {
             return [
-                'Authorization: Bearer ' . $token,
-                'Content-Type: text/calendar; charset=UTF-8'
+                CURLOPT_USERPWD => $username . ':' . $token,
+                CURLOPT_HTTPAUTH => CURLAUTH_BASIC,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: text/calendar; charset=UTF-8'
+                ]
             ];
         }
         
@@ -160,7 +216,8 @@ class oidc_helper
             'caldav_url' => $this->generateCalDavUrl(),
             'username' => $this->getUsername(),
             'session_id' => $this->getSessionId(),
-            'has_credentials' => $this->hasValidCredentials()
+            'has_credentials' => $this->hasValidCredentials(),
+            'cookie_names' => $this->cookie_names
         ];
     }
 }
