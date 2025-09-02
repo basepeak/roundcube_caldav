@@ -13,15 +13,15 @@
  */
 
 $labels = array();
-$labels['server_caldav'] = 'Configuration of CalDAV server';
-$labels['url_base'] = "Specify the url of your calDAV server under the form : \n https://my_caldav_server/remote.php/calendars/my_name";
-$labels['login'] = 'Specify your server login';
-$labels['password'] = 'Specify your password';
-$labels['save_error_msg'] = 'Your information are incorrect or incomplete';
+$labels['server_caldav'] = 'CalDAV Server Configuration (OIDC)';
+$labels['url_base'] = "CalDAV server URL (auto-detected from OIDC)";
+$labels['login'] = 'Username (auto-detected from OIDC)';
+$labels['password'] = 'Password (OIDC token used as password)';
+$labels['save_error_msg'] = 'OIDC authentication failed or configuration is incomplete';
 $labels['main_calendar'] = 'Specify your default calendar';
 $labels['calendar_choice'] = 'Warning : If you change url / login / password your preferences will be forgotten.\n
 Choose your default calendar (radio button) and others calendars you may use (checkboxes).';
-$labels['connect_error_msg'] = 'Connection with CalDAV server failed';
+$labels['connect_error_msg'] = 'Connection with CalDAV server failed using OIDC authentication';
 $labels['find_calendar_error'] = 'Getting calendars raised an error';
 $labels['something_happened_while_sending_information_to_client'] = "Error while sending information to the client ";
 $labels['ErrorEmptyArrayOfCalendar'] = "You don't have any calendar selected";

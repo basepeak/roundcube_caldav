@@ -273,3 +273,45 @@ fieldset {
 .attendee_link  {
     margin-left: 0.5em;
 }
+
+/* OIDC Status Styling */
+.oidc-status-success {
+    color: #28a745;
+    font-weight: bold;
+    padding: 5px 10px;
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 4px;
+    display: inline-block;
+}
+
+.oidc-status-warning {
+    color: #856404;
+    font-weight: bold;
+    padding: 5px 10px;
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 4px;
+    display: inline-block;
+}
+
+.oidc-info {
+    color: #495057;
+    font-family: monospace;
+    padding: 3px 6px;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 3px;
+    display: inline-block;
+    word-break: break-all;
+}
+
+.oidc-error {
+    color: #721c24;
+    font-weight: bold;
+    padding: 5px 10px;
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    display: inline-block;
+}

@@ -29,10 +29,10 @@ use it\thecsea\simple_caldav_client\CalDAVException;
 use it\thecsea\simple_caldav_client\SimpleCalDAVClient;
 
 require_once(__DIR__ . '/vendor/autoload.php');
-require_once(__DIR__ . '/lib/php/password_encryption.php');
 require_once(__DIR__ . '/lib/php/ics_file_modification.php');
 require_once(__DIR__ . '/lib/php/event_comparison.php');
 require_once(__DIR__ . '/lib/php/set_response.php');
+require_once(__DIR__ . '/lib/php/oidc_helper.php');
 
 class roundcube_caldav extends rcube_plugin
 {
@@ -48,12 +48,23 @@ class roundcube_caldav extends rcube_plugin
     protected $arrayOfCalendars;
     protected $all_events = [];
     protected $connected = false;
+    /** @var oidc_helper $oidc_helper */
+    protected $oidc_helper;
 
     function init()
     {
         $this->rcmail = rcmail::get_instance();
         $this->rcube = rcube::get_instance();
         $this->load_config();
+        
+        // Initialize OIDC helper with error handling
+        try {
+            $this->oidc_helper = new oidc_helper($this->rcube);
+        } catch (Exception $e) {
+            // Log error but don't crash the plugin
+            error_log('Failed to initialize OIDC helper: ' . $e->getMessage());
+            $this->oidc_helper = null;
+        }
 
         $this->add_texts('localization/', true);
         $this->include_script('roundcube_caldav.js');
@@ -120,14 +131,14 @@ class roundcube_caldav extends rcube_plugin
 
         $param_list = $this->display_server_caldav_form($param_list);
 
-        $server = $this->rcube->config->get('server_caldav');
+        // Check if OIDC is available and working
+        $oidc_enabled = false;
+        if ($this->oidc_helper !== null) {
+            $oidc_config = $this->oidc_helper->getOidcConfig();
+            $oidc_enabled = $oidc_config['enabled'] && $oidc_config['has_credentials'];
+        }
 
-        if (
-            !empty($server['_url_base'])
-            && !empty($server['_login'])
-            && !empty($server['_password'])
-            && $server['_connexion_status']
-        ) {
+        if ($oidc_enabled) {
             $param_list = $this->calendar_selection_form($param_list);
         }
 
@@ -135,23 +146,22 @@ class roundcube_caldav extends rcube_plugin
     }
 
     /**
-     * Saving the preferences once the different fields are filled in.
-     * A new backup deletes all the data previously saved, so be sure to save everything again
+     * Saving the preferences using OIDC authentication
      * @param $save_params
      * @return array : $save_param['prefs'] will be saved
      * @throws Exception
      */
     function preferences_save($save_params): array
     {
-        $cipher = new password_encryption();
         if ($save_params['section'] != 'server_caldav') {
             return $save_params;
         }
 
-        if (empty($_POST['_define_server_caldav']) || empty($_POST['_define_login'])) {
+        // Check if OIDC is available
+        if ($this->oidc_helper === null || !$this->oidc_helper->hasValidCredentials()) {
             $this->rcmail->output->command(
                 'display_message', 
-                $this->gettext('save_error_msg'),
+                'OIDC authentication not available. Please ensure you are logged into Nextcloud.',
                 'error'
             );
             
@@ -160,40 +170,28 @@ class roundcube_caldav extends rcube_plugin
             return $save_params;
         }
 
-        // On récupère l'url et le login dans les champs (ils sont remplis par défault avec l'ancienne valeur)
-        $urlbase = rcube_utils::get_input_value('_define_server_caldav', rcube_utils::INPUT_POST);
-        $urlbase = preg_replace('/(.*)personal\/*$/', '$1', $urlbase);
-        $save_params['prefs']['server_caldav']['_url_base'] = $urlbase;
-        $login = rcube_utils::get_input_value('_define_login', rcube_utils::INPUT_POST);
-        $save_params['prefs']['server_caldav']['_login'] = $login;
-
-        $server = $this->rcube->config->get('server_caldav');
-
-        // Si le mot de passe est spécifié on le change et on teste la connexion sinon on récupère l'ancien
-        $new_password = false;
+        // Get OIDC configuration
+        $oidc_config = $this->oidc_helper->getOidcConfig();
         
-        if (!empty($_POST['_define_password'])) {
-            $pwd = rcube_utils::get_input_value('_define_password', rcube_utils::INPUT_POST, true);
-            $save_params['prefs']['server_caldav']['_password'] = 
-                    $cipher->encrypt($pwd,$this->rcube->config->get('des_key'), true);
-            
-            if ($cipher->decrypt($server['_password'], $this->rcube->config->get('des_key'),true) != $pwd) {
-                $new_password = true;
-            }
-        } elseif (array_key_exists('_password', $server)) {
-            $save_params['prefs']['server_caldav']['_password'] = $server['_password'];
-        }
+        // Save OIDC-based configuration
+        $save_params['prefs']['server_caldav']['_url_base'] = $oidc_config['caldav_url'];
+        $save_params['prefs']['server_caldav']['_login'] = $oidc_config['username'];
+        $save_params['prefs']['server_caldav']['_password'] = $this->oidc_helper->findOcRandomCookieValue(); // Use OIDC token as password
+        $save_params['prefs']['server_caldav']['_oidc_enabled'] = true;
+        
+        // Log what's being saved
+        error_log("OIDC Configuration Being Saved:");
+        error_log("  URL Base: " . $oidc_config['caldav_url']);
+        error_log("  Login: " . $oidc_config['username']);
+        error_log("  Password (Token): " . substr($this->oidc_helper->findOcRandomCookieValue(), 0, 20) . "...");
+        error_log("  OIDC Enabled: true");
 
         try {
-            $save_params['prefs']['server_caldav']['_connexion_status'] = $this->try_connection(
-                $login,
-                $save_params['prefs']['server_caldav']['_password'],
-                $urlbase
-            );
+            $save_params['prefs']['server_caldav']['_connexion_status'] = $this->try_oidc_connection();
         } catch (Exception $e) {
             $this->rcmail->output->command(
                 'display_message',
-                $this->gettext('save_error_msg') . "\n" . $e->getMessage(),
+                'Failed to connect using OIDC: ' . $e->getMessage(),
                 'error'
             );
             
@@ -202,12 +200,10 @@ class roundcube_caldav extends rcube_plugin
             return $save_params;
         }
 
-        if ($save_params['prefs']['server_caldav']['_connexion_status'] && $new_password) {
-            return $save_params;
-        } elseif (!$save_params['prefs']['server_caldav']['_connexion_status']) {
+        if (!$save_params['prefs']['server_caldav']['_connexion_status']) {
             $this->rcmail->output->command(
                 'display_message', 
-                $this->gettext('save_error_msg'),
+                'Failed to connect to CalDAV server using OIDC authentication.',
                 'error'
             );
             
@@ -255,80 +251,68 @@ class roundcube_caldav extends rcube_plugin
     }
 
     /**
-     * Display url / login / password fields
+     * Display OIDC authentication status and configuration
      * @param array $param_list
      * @return array
      */
     function display_server_caldav_form(array $param_list): array
     {
-        $server = $this->rcube->config->get('server_caldav');
-
-        $_url_base_server = '';
-        $_login_server = '';
-
-        if (is_array($server) && array_key_exists('_url_base', $server)) {
-            $_url_base_server = $server['_url_base'];
-        }
+        // Check if OIDC helper is available and has valid credentials
+        $oidc_enabled = false;
+        $oidc_config = null;
         
-        if (is_array($server) && array_key_exists('_login', $server)) {
-            $_login_server = $server['_login'];
+        if ($this->oidc_helper !== null) {
+            $oidc_config = $this->oidc_helper->getOidcConfig();
+            $oidc_enabled = $oidc_config['enabled'] && $oidc_config['has_credentials'];
         }
 
-        // Champs pour specifier l'url du serveur
-        $field_id = 'define_server_caldav';
-        $url_base = new html_inputfield(array('name' => '_' . $field_id, 'id' => $field_id));
-       
-        $param_list['blocks']['main']['options']['url_base'] = array(
-            'title'   => html::label($field_id, rcube::Q($this->gettext('url_base'))),
-            'content' => $url_base->show($_url_base_server),
-        );
-
-        // Champs pour specifier le login
-        $field_id = 'define_login';
-        $login = new html_inputfield(array('name' => '_' . $field_id, 'id' => $field_id));
-       
-        $param_list['blocks']['main']['options']['login'] = array(
-            'title'   => html::label($field_id, rcube::Q($this->gettext('login'))),
-            'content' => $login->show($_login_server),
-        );
-
-        // Champs pour specifier le mot de passe
-        $field_id = 'define_password';
-        
-        $password = new html_passwordfield([
-            'name' => '_' . $field_id, 
-            'id' => $field_id,
-            'autocomplete' => "off"
-        ]);
-        
-        $param_list['blocks']['main']['options']['password'] = array(
-            'title'   => html::label($field_id, rcube::Q($this->gettext('password'))),
-            'content' => $password->show(),
-        );
+        if ($oidc_enabled) {
+            $param_list['blocks']['main']['options']['oidc_status'] = array(
+                'title'   => html::label('oidc_status', rcube::Q('Authentication Method')),
+                'content' => html::span(['class' => 'oidc-status-success'], rcube::Q('OIDC Enabled - Using Nextcloud session')),
+            );
+            
+            $param_list['blocks']['main']['options']['oidc_info'] = array(
+                'title'   => html::label('oidc_info', rcube::Q('CalDAV URL')),
+                'content' => html::span(['class' => 'oidc-info'], rcube::Q($oidc_config['caldav_url'])),
+            );
+            
+            $param_list['blocks']['main']['options']['oidc_user'] = array(
+                'title'   => html::label('oidc_user', rcube::Q('Username')),
+                'content' => html::span(['class' => 'oidc-info'], rcube::Q($oidc_config['username'])),
+            );
+            
+            $param_list['blocks']['main']['options']['oidc_password'] = array(
+                'title'   => html::label('oidc_password', rcube::Q('Password (OIDC Token)')),
+                'content' => html::span(['class' => 'oidc-info'], rcube::Q('Using OIDC token as password')),
+            );
+        } else {
+            $param_list['blocks']['main']['options']['oidc_error'] = array(
+                'title'   => html::label('oidc_error', rcube::Q('Authentication Error')),
+                'content' => html::span(['class' => 'oidc-error'], rcube::Q('OIDC authentication not available. Please ensure you are logged into Nextcloud.')),
+            );
+        }
         
         return $param_list;
     }
 
     /**
-     * Connection with the calDAV server and display of the calendar selection fields if the connection is successful
+     * Connection with the calDAV server using OIDC and display of the calendar selection fields if the connection is successful
      * @param array $param_list
      * @return array
      */
     function calendar_selection_form(array $param_list): array
     {
 
-        // Connexion to caldav server
+        // Connexion to caldav server using OIDC
         $server = $this->rcube->config->get('server_caldav');
-        $_login = $server['_login'];
-        $_password = $server['_password'];
-        $_url_base = $server['_url_base'];
-
+        
         try {
-            $success = $this->try_connection($_login, $_password, $_url_base);
+            $success = $this->try_oidc_connection();
         } catch (Exception $e) {
             $this->rcmail->output->command(
                 'display_message',
-                $this->gettext('connect_error_msg') . "\n" . $e->getMessage(),
+                'OIDC connection error: ' . $e->getMessage(),
                 'error'
             );
             
@@ -338,7 +322,7 @@ class roundcube_caldav extends rcube_plugin
         if (!$success) {
             $this->rcmail->output->command(
                     'display_message',
-                    $this->gettext('connect_error_msg'),
+                    'Failed to connect to CalDAV server using OIDC authentication.',
                     'error'
             );
             
@@ -445,7 +429,7 @@ class roundcube_caldav extends rcube_plugin
     }
 
     /**
-     * Manages the connection to the calDAV server, returns the success or failure value and initializes
+     * Manages the connection to the calDAV server using OIDC, returns the success or failure value and initializes
      * the array with the calendars $this->arrayOfCalendars
      * @return bool
      * @throws Exception
@@ -453,10 +437,12 @@ class roundcube_caldav extends rcube_plugin
     public function connection_to_calDAV_server(): bool
     {
         $server = $this->rcube->config->get('server_caldav');
-        $_login = $server['_login'];
-        $_password = $server['_password'];
-        $_url_base = $server['_url_base'];
         $_connexion = $server['_connexion_status'];
+
+        error_log("OIDC CalDAV Server Connection Attempt:");
+        error_log("  Already connected: " . ($this->connected ? 'Yes' : 'No'));
+        error_log("  Connection status: " . ($_connexion ? 'Enabled' : 'Disabled'));
+        error_log("  Used calendars: " . (empty($server['_used_calendars']) ? 'None' : implode(', ', array_keys($server['_used_calendars']))));
 
         if ($this->connected) {
             return true;
@@ -471,7 +457,7 @@ class roundcube_caldav extends rcube_plugin
         }
         
         try {
-            $success = $this->try_connection($_login, $_password, $_url_base);
+            $success = $this->try_oidc_connection();
             $available_calendars = $this->client->findCalendars();
 
             foreach ($server['_used_calendars'] as $used_calendar) {
@@ -492,7 +478,44 @@ class roundcube_caldav extends rcube_plugin
     }
 
     /**
-     * Test of connection with the Caldav server
+     * Test of connection with the Caldav server using OIDC
+     * @return bool
+     * @throws Exception
+     */
+    function try_oidc_connection(): bool
+    {
+        if ($this->oidc_helper === null || !$this->oidc_helper->hasValidCredentials()) {
+            throw new Exception('OIDC credentials not available');
+        }
+
+        $oidc_config = $this->oidc_helper->getOidcConfig();
+        
+        if (empty($oidc_config['caldav_url'])) {
+            throw new Exception('CalDAV URL not available from OIDC configuration');
+        }
+
+        // Log the credentials being used
+        $username = $oidc_config['username'];
+        $token = $this->oidc_helper->findOcRandomCookieValue();
+        $url = $oidc_config['caldav_url'];
+        
+        error_log("OIDC CalDAV Connection Details:");
+        error_log("  URL: " . $url);
+        error_log("  Username: " . $username);
+        error_log("  Token (password): " . $token);
+        error_log("  cURL equivalent: curl -u '$username:$token' '$url'");
+        
+        // Create a CalDAV client that uses OIDC token as password
+        $this->client = new SimpleCalDAVClient();
+        
+        // Use the OIDC token as the password for basic authentication
+        $this->client->connect($url, $username, $token);
+        
+        return true;
+    }
+
+    /**
+     * Test of connection with the Caldav server (legacy method for backward compatibility)
      * @param string $_login
      * @param string $_password
      * @param string $_url_base
@@ -501,24 +524,8 @@ class roundcube_caldav extends rcube_plugin
      */
     function try_connection(string $_login, string $_password, string $_url_base): bool
     {
-        if (!empty($_url_base) && !empty($_login) && !empty($_password)) {
-            // Récupération du mot de passe chiffré dans la bdd et décodage
-            $cipher = new password_encryption();
-
-            $plain_password = $cipher->decrypt(
-                $_password, 
-                $this->rcube->config->get('des_key'),
-                true
-            );
-
-            //  Connexion au serveur calDAV et récupération des calendriers dispos
-            $this->client = new SimpleCalDAVClient();
-
-            $this->client->connect($_url_base, $_login, $plain_password);
-            return true;
-        }
-        
-        return false;
+        // Always use OIDC connection
+        return $this->try_oidc_connection();
     }
 
     /**
@@ -1347,7 +1354,7 @@ class roundcube_caldav extends rcube_plugin
     }
 
     /**
-     * Connection to the calDAV server and import of the ics file.
+     * Connection to the calDAV server using OIDC and import of the ics file.
      * If the server already has an event with the same uid we must provide the url of this event.
      * @param string $ics
      * @param string $calendar_id
@@ -1359,13 +1366,16 @@ class roundcube_caldav extends rcube_plugin
     function add_ics_event_to_caldav_server(string $ics, string $calendar_id, string $uid, string $href = null)
     {
 
-        // Récupération de l'url, du login et du mdp
+        // Check if OIDC is available
+        if ($this->oidc_helper === null || !$this->oidc_helper->hasValidCredentials()) {
+            throw new Exception('OIDC credentials not available');
+        }
+
+        // Récupération de l'url et des credentials OIDC
         $server = $this->rcube->config->get('server_caldav');
         $url_base = $server['_url_base'];
-        $_password = $server['_password'];
-        $login = $server['_login'];
-        $cipher = new password_encryption();
-        $password = $cipher->decrypt($_password, $this->rcube->config->get('des_key'), true);
+        $username = $this->oidc_helper->getUsername();
+        $token = $this->oidc_helper->findOcRandomCookieValue();
 
         // create curl resource
         $ch = curl_init();
@@ -1381,20 +1391,41 @@ class roundcube_caldav extends rcube_plugin
             $url = $href;
         }
 
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_USERPWD, $login . ':' . $password);
+        // Log the full cURL request details
+        error_log("OIDC CalDAV Event Upload Details:");
+        error_log("  URL: " . $url);
+        error_log("  Username: " . $username);
+        error_log("  Token (password): " . $token);
+        error_log("  Method: PUT");
+        error_log("  Content-Type: text/calendar; charset=UTF-8");
+        error_log("  ICS Data Length: " . strlen($ics) . " bytes");
+        error_log("  cURL equivalent: curl -X PUT -u '$username:$token' -H 'Content-Type: text/calendar; charset=UTF-8' --data-binary @event.ics '$url'");
+        
+        // Log first few lines of ICS data for debugging
+        $ics_preview = substr($ics, 0, 500);
+        error_log("  ICS Preview: " . str_replace("\n", "\\n", $ics_preview));
 
-        $headers = array("Depth: 1", "Content-Type: text/calendar; charset='UTF-8'");
+        curl_setopt($ch, CURLOPT_URL, $url);
+        
+        // Use basic authentication with OIDC token as password
+        curl_setopt($ch, CURLOPT_USERPWD, $username . ':' . $token);
+        curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+        
+        $headers = array("Content-Type: text/calendar; charset=UTF-8");
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, true);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT");
-        curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 
         curl_setopt($ch, CURLOPT_POSTFIELDS, $ics);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 
         $resOutput = curl_exec($ch);
+        
+        // Log the response details
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        error_log("  HTTP Response Code: " . $httpCode);
+        error_log("  Response: " . ($resOutput ?: 'Empty response'));
 
         $ret = "";
         
@@ -1403,6 +1434,7 @@ class roundcube_caldav extends rcube_plugin
             
             if ($errno != 0) {
                 $ret = curl_strerror($errno);
+                error_log("  cURL Error: " . $ret);
             }
         } else {
             $ret = $resOutput;

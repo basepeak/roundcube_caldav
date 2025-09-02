@@ -1,6 +1,6 @@
-# RoundCube CalDAV - CalDAV calendar for Roundcube Webmail
+# RoundCube CalDAV - CalDAV calendar for Roundcube Webmail (OIDC)
 
-Set a remote CalDav server and reply to your seetings invitation directly in Roundcube Mail
+Set a remote CalDav server and reply to your meetings invitation directly in Roundcube Mail using OIDC token as password authentication
 
 ![](doc/caldav_screen.png)
 
