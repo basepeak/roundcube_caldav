@@ -11,19 +11,11 @@ class oidc_helper
 {
     private $rcube;
     private $config;
-    private $cookie_names;
     
     public function __construct($rcube)
     {
         $this->rcube = $rcube;
         $this->config = $rcube->config;
-        
-        // Get configurable cookie names with fallback to defaults
-        $this->cookie_names = $this->config->get('nextcloud_cookies', [
-            'token' => 'nc_token',
-            'username' => 'nc_username',
-            'session_id' => 'nc_session_id'
-        ]);
     }
     
     /**
@@ -38,9 +30,9 @@ class oidc_helper
         
         // Log cookie status for debugging
         error_log("OIDC Cookie Status:");
-        error_log("  " . $this->cookie_names['token'] . ": " . (isset($_COOKIE[$this->cookie_names['token']]) ? 'Present' : 'Missing'));
-        error_log("  " . $this->cookie_names['username'] . ": " . (isset($_COOKIE[$this->cookie_names['username']]) ? 'Present' : 'Missing'));
-        error_log("  " . $this->cookie_names['session_id'] . ": " . (isset($_COOKIE[$this->cookie_names['session_id']]) ? 'Present' : 'Missing'));
+        error_log("  ocXXXXXXXX cookie: " . ($this->findOcRandomCookieValue() !== null ? 'Present' : 'Missing'));
+        error_log("  nc_username: " . (isset($_COOKIE['nc_username']) ? 'Present' : 'Missing'));
+        error_log("  nc_session_id: " . (isset($_COOKIE['nc_session_id']) ? 'Present' : 'Missing'));
         error_log("  All cookies present: " . ($has_cookies ? 'Yes' : 'No'));
         
         return $has_cookies;
@@ -53,9 +45,9 @@ class oidc_helper
      */
     private function hasNextcloudCookies(): bool
     {
-        return isset($_COOKIE[$this->cookie_names['token']]) && 
-               isset($_COOKIE[$this->cookie_names['username']]) && 
-               isset($_COOKIE[$this->cookie_names['session_id']]);
+        return $this->findOcRandomCookieValue() !== null && 
+               isset($_COOKIE['nc_username']) && 
+               isset($_COOKIE['nc_session_id']);
     }
     
     /**
@@ -108,23 +100,34 @@ class oidc_helper
     }
     
     /**
-     * Get Nextcloud token from cookies
-     * 
+     * Find the Nextcloud "ocXXXXXXXX" cookie (random, alphanumeric, no underscore).
+     * Examples it SHOULD match:  ocwe8qziyo2m
+     * Examples it SHOULD NOT match: oc_sessionPassphrase, oc_username, oc_token
+     *
      * @return string|null
      */
-    public function getAccessToken(): ?string
-    {
-        $token = $_COOKIE[$this->cookie_names['token']] ?? null;
-        
-        if ($token) {
-            error_log("OIDC Token Retrieved: " . substr($token, 0, 20) . "...");
-        } else {
-            error_log("OIDC Token: Not found in cookies");
+    public function findOcRandomCookieValue(): ?string {
+        // Pull cookies from PHP's superglobal
+        foreach ($_COOKIE as $name => $value) {
+            // match: starts with 'oc', then one or more lowercase letters or digits, and nothing else
+            if (preg_match('/^oc[a-z0-9]+$/', $name)) {
+                error_log("OIDC found pw cookie: " . $name);
+                return $value;
+            }
         }
-        
-        return $token;
+        return null;
     }
-    
+
+    /**
+     * Gets both the nc_username and the random cookie
+     */
+    public function getAccountFromCookie(): array {
+        $username = $_COOKIE['nc_username'] ?? '';
+        $password = $this->findOcRandomCookieValue();
+        
+        return ['username' => $username, 'password' => $password];
+    }
+
     /**
      * Get Nextcloud username from cookies
      * 
@@ -132,7 +135,7 @@ class oidc_helper
      */
     public function getUsername(): ?string
     {
-        $username = $_COOKIE[$this->cookie_names['username']] ?? null;
+        $username = $_COOKIE['nc_username'] ?? null;
         
         if ($username) {
             error_log("OIDC Username Retrieved: " . $username);
@@ -150,7 +153,7 @@ class oidc_helper
      */
     public function getSessionId(): ?string
     {
-        return $_COOKIE[$this->cookie_names['session_id']] ?? null;
+        return $_COOKIE['nc_session_id'] ?? null;
     }
     
     /**
@@ -161,7 +164,7 @@ class oidc_helper
     public function hasValidCredentials(): bool
     {
         return $this->hasNextcloudCookies() && 
-               $this->getAccessToken() !== null && 
+               $this->findOcRandomCookieValue() !== null && 
                $this->getUsername() !== null;
     }
     
@@ -175,8 +178,8 @@ class oidc_helper
     {
         return [
             'username' => $this->getUsername(),
-            'password' => $this->getAccessToken(), // Use OIDC token as password
-            'token' => $this->getAccessToken()
+            'password' => $this->findOcRandomCookieValue(), // Use OIDC token as password
+            'token' => $this->findOcRandomCookieValue()
         ];
     }
     
@@ -188,7 +191,7 @@ class oidc_helper
     public function getCurlOptions(): array
     {
         $username = $this->getUsername();
-        $token = $this->getAccessToken();
+        $token = $this->findOcRandomCookieValue();
         
         if ($username && $token) {
             return [
@@ -217,7 +220,11 @@ class oidc_helper
             'username' => $this->getUsername(),
             'session_id' => $this->getSessionId(),
             'has_credentials' => $this->hasValidCredentials(),
-            'cookie_names' => $this->cookie_names
+            'cookie_names' => [
+                'token' => 'ocXXXXXXXX (dynamic)',
+                'username' => 'nc_username',
+                'session_id' => 'nc_session_id'
+            ]
         ];
     }
 }
